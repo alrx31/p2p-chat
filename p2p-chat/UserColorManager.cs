@@ -21,9 +21,10 @@ public static class UserColorManager
     public static ConsoleColor GetColorForUser(string username)
     {
         username = username.Split(' ')[1];
-        Console.WriteLine(username);
+        //Console.WriteLine(username);
         username = username.Substring(1, username.Length-2);
-        Console.WriteLine(username);
+        //Console.WriteLine(username);
+        
         return _userColors.GetOrAdd(username, key => 
         {
             int hash = Math.Abs(key.GetHashCode());

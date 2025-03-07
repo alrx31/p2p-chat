@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 using System.Text;
 using p2p_chat;
 
@@ -9,11 +8,13 @@ public class Program
 {
     const int UDP_PORT = 9000;
     const int TCP_PORT = 9001;
+    const int TCP_S_PORT = 9002;
     
     static string localName;
     static string localIP;
     static UdpClient udpClient;
 
+    static ConcurrentBag<string> history = new ConcurrentBag<string>();
     static ConcurrentDictionary<IPEndPoint, TcpClient> tcpClients = new ConcurrentDictionary<IPEndPoint, TcpClient>();
 
     public static async Task Main(string[] args)
@@ -52,8 +53,8 @@ public class Program
     #region UDP
     private static async Task SendUdpBroadcasts(UdpClient udpClient)
     {
-        await Task.Delay(500);
-        var message = CreateMessage(MessageTypes.Message, localName);
+        await Task.Delay(100);
+        var message = CreateMessage(MessageTypes.UserEntered, localName);
 
         foreach (var targetIp in GetLoopbackIPAddresses())
         {
@@ -89,9 +90,8 @@ public class Program
                 var endpoint = result.RemoteEndPoint;
                 var message = Encoding.UTF8.GetString(result.Buffer);
 
-                Console.WriteLine($"Received UDP message from {endpoint}: {message}");
-
-                await CreateTcpConnection(endpoint);
+                //Console.WriteLine($"Received UDP message from {endpoint}: {message}");
+                _ = Task.Run(()=>CreateTcpConnection(endpoint));
             }
         }
         catch (Exception ex)
@@ -99,6 +99,8 @@ public class Program
             Console.WriteLine($"Error in UDP listener for {ip}: {ex.Message}");
         }
     }
+
+   
 
     #endregion
 
@@ -111,13 +113,13 @@ public class Program
 
         try
         {
-            
                 var tcpClient = await client.AcceptTcpClientAsync();
                 var endPoint = tcpClient.Client.RemoteEndPoint as IPEndPoint;
                 var remoteIp = endPoint.Address;
                 
-                Console.WriteLine($"Connected to {endPoint.Address}:{endPoint.Port}");
-
+                //Console.WriteLine($"(L)Connected to {endPoint.Address}:{endPoint.Port}");
+                //PrintDictionary();
+                
                 if (!tcpClients.ContainsKey(endPoint))
                 {
                     tcpClients.TryAdd(endPoint, tcpClient);
@@ -138,29 +140,38 @@ public class Program
 
     public static async Task ReceiveTcpMessage(TcpClient tcpClient, IPEndPoint endPoint)
     {
-        var stream = tcpClient.GetStream();
-        var buffer = new byte[1024];
-
         try
         {
             while (true)
             {
+                var stream = tcpClient.GetStream();
+                var buffer = new byte[1024];
+                
                 var byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (byteCount == 0) break;
 
                 var messageType = (MessageTypes)buffer[0];
                 var content = Encoding.UTF8.GetString(buffer, 3, byteCount-3);
 
+                //Console.WriteLine("RC");
+                //PrintDictionary();
+                
                 switch (messageType)
                 {
-                    case MessageTypes.UserEntered:
-                        HandleConnectMessage(content, endPoint);
+                    case MessageTypes.History:
+                        var originalColor1 = Console.ForegroundColor;
+                        Console.ForegroundColor = UserColorManager.GetColorForUser(content);
+                        Console.WriteLine(content);
+                        Console.ForegroundColor = originalColor1;
+                
                         break;
                     case MessageTypes.Message:
                         var originalColor = Console.ForegroundColor;
                         Console.ForegroundColor = UserColorManager.GetColorForUser(content);
                         Console.WriteLine(content);
                         Console.ForegroundColor = originalColor;
+                        
+                        history.Add(content);
 
                         foreach (var client in tcpClients
                                      .Where(kv => !kv.Key.Equals(endPoint)))
@@ -172,36 +183,23 @@ public class Program
                         Console.WriteLine(content);
                         tcpClients.TryRemove(endPoint, out _);
                         tcpClient.Close();
-                        //_ = Task.Run(() => SendUdpBroadcasts(udpClient));
+                        _ = Task.Run(() => SendUdpBroadcasts(udpClient));
                         return;
                 }
             }
         }
         catch (Exception e)
         {
-            Console.WriteLine($"Error while receiving TCP message from {endPoint}: {e.Message}");
+            //Console.WriteLine($"Error while receiving TCP message from {endPoint}: {e.Message}");
         }
         finally
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Connection with {endPoint} closed");
             tcpClients.TryRemove(endPoint, out _);
-            tcpClient.Close();
         }
     }
 
-    public static void HandleConnectMessage(string content, IPEndPoint endPoint)
-    {
-        var parts = content.Split(':');
-        if (parts.Length != 2) return;
-        
-        var (name, ip) = (parts[0], parts[1]);
-        
-        var newEp = new IPEndPoint(IPAddress.Parse(ip),TCP_PORT);
-        if (!tcpClients.ContainsKey(newEp))
-        {
-            _ = Task.Run(() => CreateTcpConnection(newEp));
-        }
-    }
+    
 
     public static async Task CreateTcpConnection(IPEndPoint endPoint)
     {
@@ -217,26 +215,46 @@ public class Program
             return;
         }
 
-        var tcpClient = new TcpClient();
+        var tcpClient = new TcpClient(new IPEndPoint(IPAddress.Parse(localIP), TCP_S_PORT));
         try
         {
-            Console.WriteLine(targetEndPoint.ToString());
+            //Console.WriteLine(targetEndPoint.ToString());
             await tcpClient.ConnectAsync(targetEndPoint);
-            Console.WriteLine($"Connected to {remoteIp}:{TCP_PORT}");
+            //Console.WriteLine($"(C)Connected to {remoteIp}:{TCP_PORT}");
 
             tcpClients.TryAdd(targetEndPoint, tcpClient);
-
+            //Console.WriteLine("CTCP");
+            //PrintDictionary();
+            
+            _ = Task.Run(()=>SendChatHistory(tcpClient));
             _ = Task.Run(() => ReceiveTcpMessage(tcpClient, targetEndPoint));
 
-            var message = CreateMessage(MessageTypes.Message, $"{DateTime.Now:HH:mm:ss} [{localName}] connected");
+            var message = CreateMessage(MessageTypes.Message, $"\n{DateTime.Now:HH:mm:ss} [{localName}] connected");
             _ = Task.Run(()=>SendTcpMessage(tcpClient, message));
         }
         catch (Exception e)
         {
-            Console.WriteLine($"Failed to connect to {targetEndPoint.Address}:{targetEndPoint.Port} {e.Message}");
+            //Console.WriteLine($"Failed to connect to {targetEndPoint.Address}:{targetEndPoint.Port} {e.Message}");
+            tcpClients.TryRemove(targetEndPoint, out _);
             tcpClient.Close();
         }
+    } 
+    public static async Task SendChatHistory(TcpClient tcpClient)
+    {
+        var messages = new List<byte[]>();
+
+        foreach (var hItem in history)
+        {
+            messages.Add(CreateMessage(MessageTypes.History,"\n" + hItem));
+        }
+
+        foreach (var message in messages)
+        {
+            _ = Task.Run(()=>SendTcpMessage(tcpClient, message));
+        }
     }
+    
+    
 
     public static async Task SendTcpMessage(TcpClient tcpClient, byte[] message)
     {
@@ -261,10 +279,14 @@ public class Program
         {
             var message =await Console.In.ReadLineAsync();
             if (string.IsNullOrEmpty(message)) continue;
-
+            
+            //Console.WriteLine("UI");
+            //PrintDictionary();
+            
             if (message == "/exit")
             {
                 var disconnectMessage = CreateMessage(MessageTypes.UserLeft, $"{DateTime.Now:HH:mm:ss} [{localName}] disconnected");
+                
                 foreach (var tcpClient in tcpClients.Values.ToArray())
                 {
                     await SendTcpMessage(tcpClient, disconnectMessage);
@@ -276,10 +298,13 @@ public class Program
             
             var formattedMessage = $"{DateTime.Now:HH:mm:ss} [{localName}] {message}";
             var messageBytes = CreateMessage(MessageTypes.Message, formattedMessage);
-
+            
+            history.Add(formattedMessage);
+            
             foreach (var tcpClient in tcpClients.Values.ToArray())
             {
-                await SendTcpMessage(tcpClient, messageBytes);
+                await Task.Delay(50);
+                _ = Task.Run(()=>SendTcpMessage(tcpClient, messageBytes));
             }
         }
     }
@@ -291,7 +316,7 @@ public class Program
     private static string[] GetLoopbackIPAddresses()
     {
         string[] ips = new string[255];
-        for (int i = 1; i <= 255; i++)
+        for (int i = 1; i <= 20; i++)
         {
             ips[i - 1] = $"127.0.0.{i}";
         }
@@ -314,5 +339,14 @@ public class Program
         return result;
     }
 
+    static void PrintDictionary()
+    {
+        foreach (var tcpClient in tcpClients)
+        {
+            Console.WriteLine(tcpClient.Key);
+        }
+    }
+    
     #endregion
+    
 }
