@@ -6,6 +6,8 @@ using p2p_chat;
 
 public class Program
 {
+    #region VARIABLES
+
     const int UDP_PORT = 9000;
     const int TCP_PORT = 9001;
     const int TCP_S_PORT = 9002;
@@ -17,6 +19,9 @@ public class Program
     static ConcurrentBag<string> history = new ConcurrentBag<string>();
     static ConcurrentDictionary<IPEndPoint, TcpClient> tcpClients = new ConcurrentDictionary<IPEndPoint, TcpClient>();
 
+
+    #endregion
+    
     public static async Task Main(string[] args)
     {
         if (args.Length < 2)
@@ -159,10 +164,14 @@ public class Program
                 switch (messageType)
                 {
                     case MessageTypes.History:
-                        var originalColor1 = Console.ForegroundColor;
-                        Console.ForegroundColor = UserColorManager.GetColorForUser(content);
-                        Console.WriteLine(content);
-                        Console.ForegroundColor = originalColor1;
+                        var messages = content.Split('\n');
+                        foreach (var message in messages)
+                        {
+                            var originalColor1 = Console.ForegroundColor;
+                            Console.ForegroundColor = UserColorManager.GetColorForUser(message);
+                            Console.WriteLine(message);
+                            Console.ForegroundColor = originalColor1;
+                        }
                 
                         break;
                     case MessageTypes.Message:
@@ -183,7 +192,7 @@ public class Program
                         Console.WriteLine(content);
                         tcpClients.TryRemove(endPoint, out _);
                         tcpClient.Close();
-                        _ = Task.Run(() => SendUdpBroadcasts(udpClient));
+                        //_ = Task.Run(() => SendUdpBroadcasts(udpClient));
                         return;
                 }
             }
@@ -220,7 +229,7 @@ public class Program
         {
             //Console.WriteLine(targetEndPoint.ToString());
             await tcpClient.ConnectAsync(targetEndPoint);
-            //Console.WriteLine($"(C)Connected to {remoteIp}:{TCP_PORT}");
+            Console.WriteLine($"(C)Connected to {remoteIp}:{TCP_PORT}");
 
             tcpClients.TryAdd(targetEndPoint, tcpClient);
             //Console.WriteLine("CTCP");
@@ -271,7 +280,7 @@ public class Program
 
     #endregion
 
-    #region UserInput
+    #region USERINPUT
 
     public static async Task HandleUserInput()
     {
@@ -311,7 +320,7 @@ public class Program
 
     #endregion
 
-    #region Additional
+    #region ADDITIONAL
 
     private static string[] GetLoopbackIPAddresses()
     {
@@ -348,5 +357,4 @@ public class Program
     }
     
     #endregion
-    
 }
