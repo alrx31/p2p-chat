@@ -114,17 +114,19 @@ public class Program
     {
         var client = new TcpListener(IPAddress.Parse(ip), TCP_PORT);
         client.Start();
-        Console.WriteLine($"start listening on {ip}:{TCP_PORT}");
+        Console.WriteLine($"Listening on {ip}:{TCP_PORT}");
 
         try
         {
+            while (true) 
+            {
                 var tcpClient = await client.AcceptTcpClientAsync();
                 var endPoint = tcpClient.Client.RemoteEndPoint as IPEndPoint;
                 var remoteIp = endPoint.Address;
-                
+
                 //Console.WriteLine($"(L)Connected to {endPoint.Address}:{endPoint.Port}");
                 //PrintDictionary();
-                
+
                 if (!tcpClients.ContainsKey(endPoint))
                 {
                     tcpClients.TryAdd(endPoint, tcpClient);
@@ -135,78 +137,88 @@ public class Program
                     Console.WriteLine($"Already connected to {remoteIp}");
                     tcpClient.Close();
                 }
-            
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine(e);
-        }
-    }
-
-    public static async Task ReceiveTcpMessage(TcpClient tcpClient, IPEndPoint endPoint)
-    {
-        try
-        {
-            while (true)
-            {
-                var stream = tcpClient.GetStream();
-                var buffer = new byte[1024];
-                
-                var byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
-                if (byteCount == 0) break;
-
-                var messageType = (MessageTypes)buffer[0];
-                var content = Encoding.UTF8.GetString(buffer, 3, byteCount-3);
-
-                //Console.WriteLine("RC");
-                //PrintDictionary();
-                
-                switch (messageType)
-                {
-                    case MessageTypes.History:
-                        var messages = content.Split('\n');
-                        foreach (var message in messages)
-                        {
-                            var originalColor1 = Console.ForegroundColor;
-                            Console.ForegroundColor = UserColorManager.GetColorForUser(message);
-                            Console.WriteLine(message);
-                            Console.ForegroundColor = originalColor1;
-                        }
-                
-                        break;
-                    case MessageTypes.Message:
-                        var originalColor = Console.ForegroundColor;
-                        Console.ForegroundColor = UserColorManager.GetColorForUser(content);
-                        Console.WriteLine(content);
-                        Console.ForegroundColor = originalColor;
-                        
-                        history.Add(content);
-
-                        foreach (var client in tcpClients
-                                     .Where(kv => !kv.Key.Equals(endPoint)))
-                        {
-                            await SendTcpMessage(client.Value, buffer[0..byteCount]);
-                        }
-                        break;
-                    case MessageTypes.UserLeft:
-                        Console.WriteLine(content);
-                        tcpClients.TryRemove(endPoint, out _);
-                        tcpClient.Close();
-                        //_ = Task.Run(() => SendUdpBroadcasts(udpClient));
-                        return;
-                }
             }
         }
         catch (Exception e)
         {
-            //Console.WriteLine($"Error while receiving TCP message from {endPoint}: {e.Message}");
-        }
-        finally
-        {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Connection with {endPoint} closed");
-            tcpClients.TryRemove(endPoint, out _);
+            Console.WriteLine($"Error in TCP listener: {e.Message}");
         }
     }
+
+
+    public static async Task ReceiveTcpMessage(TcpClient tcpClient, IPEndPoint endPoint)
+{
+    try
+    {
+        while (true)
+        {
+            var stream = tcpClient.GetStream();
+            var buffer = new byte[1024];
+            
+            var byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
+            if (byteCount == 0) break;  
+
+            if (byteCount < 3)
+            {
+                Console.WriteLine("Received incomplete message (less than 3 bytes), skipping...");
+                continue;
+            }
+
+            var messageType = (MessageTypes)buffer[0];
+
+            int messageLength = (buffer[1] << 8) | buffer[2];
+
+            if (messageLength != (byteCount - 3))
+            {
+                Console.WriteLine($"Message length mismatch. Expected {messageLength} bytes, but received {byteCount - 3} bytes. Skipping...");
+                continue;
+            }
+
+            var content = Encoding.UTF8.GetString(buffer, 3, messageLength);
+
+            //Console.WriteLine("RC");
+            //PrintDictionary();
+
+            switch (messageType)
+            {
+                case MessageTypes.History:
+                    var messages = content.Split('\n');
+                    foreach (var message in messages)
+                    {
+                        var originalColor1 = Console.ForegroundColor;
+                        Console.ForegroundColor = UserColorManager.GetColorForUser(message);
+                        Console.WriteLine(message);
+                        Console.ForegroundColor = originalColor1;
+                    }
+                    break;
+
+                case MessageTypes.Message:
+                    var originalColor = Console.ForegroundColor;
+                    Console.ForegroundColor = UserColorManager.GetColorForUser(content);
+                    Console.WriteLine(content);
+                    Console.ForegroundColor = originalColor;
+
+                    history.Add(content);
+                    break;
+
+                case MessageTypes.UserLeft:
+                    Console.WriteLine(content);
+                    tcpClients.TryRemove(endPoint, out _);
+                    tcpClient.Close();
+                    return;
+            }
+        }
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine($"Error while receiving TCP message from {endPoint}: {e.Message}");
+    }
+    finally
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Connection with {endPoint} closed");
+        tcpClients.TryRemove(endPoint, out _);
+    }
+}
 
     
 
@@ -224,12 +236,13 @@ public class Program
             return;
         }
 
-        var tcpClient = new TcpClient(new IPEndPoint(IPAddress.Parse(localIP), TCP_S_PORT));
+        var tcpClient = new TcpClient();
+        //Console.WriteLine(tcpClient.Client.AddressFamily);
         try
         {
             //Console.WriteLine(targetEndPoint.ToString());
             await tcpClient.ConnectAsync(targetEndPoint);
-            Console.WriteLine($"(C)Connected to {remoteIp}:{TCP_PORT}");
+            //Console.WriteLine($"(C)Connected to {remoteIp}:{TCP_PORT}");
 
             tcpClients.TryAdd(targetEndPoint, tcpClient);
             //Console.WriteLine("CTCP");
@@ -243,7 +256,7 @@ public class Program
         }
         catch (Exception e)
         {
-            //Console.WriteLine($"Failed to connect to {targetEndPoint.Address}:{targetEndPoint.Port} {e.Message}");
+            Console.WriteLine($"Failed to connect to {targetEndPoint.Address}:{targetEndPoint.Port} {e.Message}");
             tcpClients.TryRemove(targetEndPoint, out _);
             tcpClient.Close();
         }
@@ -309,7 +322,6 @@ public class Program
             var messageBytes = CreateMessage(MessageTypes.Message, formattedMessage);
             
             history.Add(formattedMessage);
-            
             foreach (var tcpClient in tcpClients.Values.ToArray())
             {
                 await Task.Delay(50);
